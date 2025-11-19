@@ -53,7 +53,7 @@ def print_results_reducidos(title, best):
     print(f"PV: {best['PV_kWp']:.2f} kWp, BESS: {best['E_bess_kWh']:.2f} kWh")
 
     # Convertir a tabla anual con métricas solicitadas
-    years = sorted(best['fuel_hybrid_by_year'].keys())
+    years = sorted(best['Fuel_liters_hybrid_by_year'].keys())
 
     # Claves esperadas que fueron añadidas en optimizer al 'best'
     consumo_pv = best.get('consumo_desde_pv') or {}
@@ -61,9 +61,11 @@ def print_results_reducidos(title, best):
     generacion = best.get('generación') or {}
     gen_hours = best.get('horas_generador_on') or {}
     gross_savings = best.get('gross_savings') or {}
+    consumo_genset = best.get('consumo_desde_genset') or {}
+
 
     data = {
-        "Consumo desde Genset": [best['fuel_hybrid_by_year'].get(y, 0.0) for y in years],
+        "Consumo desde Genset": [consumo_genset.get(y, 0.0) for y in years],
         "Consumo desde FV": [consumo_pv.get(y, 0.0) for y in years],
         "Consumo desde BESS": [consumo_bess.get(y, 0.0) for y in years],
         "Pérdidas FV": [best['Losses_by_year'].get(y, 0.0) for y in years],
@@ -91,12 +93,6 @@ def interp_lph_from_curve(percent, curve_dict):
     """
     percent: porcentaje de carga (0..inf), por ejemplo 30 -> 30%
     curve_dict: {25: lph25, 50: lph50, 75: lph75, 100: lph100}
-    Strategy:
-     - extend to include 0% -> 0 L/h
-     - use linear interpolation for 0..100
-     - if percent > 100:
-         - si allow extrapolation, extrapolamos por proporcionalidad con punto 100
-         - si no, cap al valor en 100%
     """
     # Preparar arrays ordenados
     xp = [0, 25, 50, 75, 100]
@@ -105,7 +101,6 @@ def interp_lph_from_curve(percent, curve_dict):
           float(curve_dict.get(50, 0.0)),
           float(curve_dict.get(75, 0.0)),
           float(curve_dict.get(100, 0.0))]
-    # Interpolación lineal dentro de 0..100
     percent_clamped = percent
     if percent_clamped < 0:
         percent_clamped = 0.0
@@ -113,12 +108,8 @@ def interp_lph_from_curve(percent, curve_dict):
         lph = float(np.interp(percent_clamped, xp, fp))
         return lph
     else:
-        # percent > 100: extrapolar por proporcionalidad con el punto 100
-        # lph_100 = fp[-1]; suponemos consumo proporcional al exceso de potencia
         lph_100 = fp[-1]
-        # si lph_100 == 0, devolvemos 0 para evitar 0*inf
         if lph_100 == 0:
             return 0.0
-        # extrapolación simple:
         lph = lph_100 * (percent_clamped / 100.0)
         return float(lph)

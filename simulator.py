@@ -7,7 +7,8 @@ class SimulationConfig:
                 r=0.07,                        # Tasa de descuento               
                 ef_charge=0.95,                # Eficiencia de carga del BESS  
                 ef_discharge=0.95,             # Eficiencia de descarga del BESS
-                DOD=0.8,                       # DOD de la batería
+                soc_max_frac = 0.95,
+                soc_min_frac = 0.05,
                 charge_rate=0.5,               # 0.5C Capacidad máxima de carga       
                 discharge_rate=0.5,            # 0.5C Capacidad máxima de descarga 
                 bess_capacity_factors=None,    # Lista de factores de capacidad del BESS por año (1.0 = sin degradación)                      
@@ -36,9 +37,8 @@ class SimulationConfig:
         
         self.charge_ef = ef_charge
         self.discharge_ef = ef_discharge
-        self.DOD = DOD
-        self.soc_min_frac = (1.0 - DOD)/2
-        self.soc_max_frac = 1.0 - self.soc_min_frac
+        self.soc_min_frac =soc_min_frac
+        self.soc_max_frac = soc_max_frac
         self.charge_rate = charge_rate
         self.discharge_rate = discharge_rate
         self.pv_deg_rate = pv_deg_rate
@@ -93,7 +93,7 @@ def simulate_operation(PV_kWp, E_bess_kWh, irr_annual, load_annual, cfg: Simulat
     # Preparación de captura horaria (opcional) para un día de enero del año 1
     capture_hours_range = None
     hourly_capture = None
-    if isinstance(capture_day_of_january, int) and 1 <= capture_day_of_january <= 31:
+    if isinstance(capture_day_of_january, int) and 1 <= capture_day_of_january <= 100:
         start_h = (capture_day_of_january - 1) * 24
         end_h = start_h + 24
         capture_hours_range = (start_h, end_h)
@@ -176,7 +176,7 @@ def simulate_operation(PV_kWp, E_bess_kWh, irr_annual, load_annual, cfg: Simulat
             # Para escenario "solo generador": genset debe servir toda la carga 'load'
             if load > 1e-12:
                 percent_only = (load / cfg.DG_power) * 100.0 if cfg.DG_power > 0 else 100.0
-                if percent_only > 100.0:
+                if percent_only > 110.0:
                     raise ValueError("El tamaño del generador no es suficiente para suplir el consumo del caso solo genset.")
                 else:
                     fuel_lph_only = interp_lph_from_curve(percent_only, curve)
