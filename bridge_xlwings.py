@@ -1,38 +1,57 @@
 import xlwings as xw
-import main  
-
+import traceback
 
 def run_optimization():
-    wb = xw.Book.caller()
+    """
+    Script invocado desde Excel:
+    RunPython("import bridge_xlwings; bridge_xlwings.run_optimization()")
+    """
+    try:
+        import main
 
-    # === 1) Leer inputs desde Excel ===
-    sh_sfv = wb.sheets["SFV+BESS"]
+        res = main.run_optimizer()
 
-    # Debes reemplazar estas celdas con tus coordenadas reales:
-    pv_min = sh_sfv["C5"].value
-    pv_max = sh_sfv["D5"].value
-    bess_min = sh_sfv["C6"].value
-    bess_max = sh_sfv["D6"].value
+        wb = xw.Book.caller()
+        sistema = wb.sheets["SFV+BESS"]
 
-    # === 2) Llamar a tu optimizador existente ===
-    # Tu main.py debe tener una función que reciba los límites
-    # Si aún no la tienes, te digo cómo agregarla sin romper nada
-    resultado = main.run_optimizer(
-        pv_min=pv_min,
-        pv_max=pv_max,
-        bess_min=bess_min,
-        bess_max=bess_max,
-    )
+        pv = res.get("pv_opt")
+        bess = res.get("bess_opt")
 
-    # === 3) Escribir los resultados en Excel ===
-    sh_sfv["F5"].value = resultado["pv_optimo"]
-    sh_sfv["F6"].value = resultado["bess_optimo"]
-    sh_sfv["F7"].value = resultado["vpn"]
+        if pv is None or bess is None:
+            wb.app.alert(
+                "⚠️ No se encontró una solución óptima.\n\n"
+                "Revisa los rangos de PV/BESS o la restricción del generador.",
+            )
+            sistema.range("I36").value = "Optimización sin solución"
+            sistema.range("J37").value = "SIN SOLUCIÓN"
+            sistema.range("J38").value = ""
+            sistema.range("J39").value = ""
+            sistema.range("I40").value = ""
+            return
 
+        else:
+            sistema.range("I36").value = f"RESULTADO: PV={res['pv_opt']:.2f}, BESS={res['bess_opt']:.2f}"
 
-def main():
-    run_optimization()
+            # ✅ Nuevo: alerta visual al usuario
+            wb.app.alert(
+                f"✅ Optimización finalizada con éxito.\n\n"
+                f"PV óptimo: {res['pv_opt']:.2f}\n"
+                f"BESS óptimo: {res['bess_opt']:.2f}\n"
+                f"Tiempo transcurrido: {res['tiempo_transcurrido_optimizacion']:.2f} segundos"
+            )
+            sistema.range("I43").value = ""
+            sistema.range("I44").value = ""
 
+    except Exception as e:
+        # Escribe error en la hoja
+        try:
+            wb = xw.Book.caller()
+            sistema = wb.sheets["SFV+BESS"]
+            sistema.range("I36").value = "❌ ERROR EN LA OPTIMIZACIÓN"
+            sistema.range("I43").value = str(e)
+            sistema.range("I44").value = traceback.format_exc()
+        except Exception:
+            pass
 
-if __name__ == "__main__":
-    main()
+        # Relevanta la excepción para depuración en consola
+        raise

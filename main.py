@@ -2,14 +2,272 @@ from data_loader import read_irradiation_from_excel, expand_monthly_matrix_to_an
 from simulator import SimulationConfig, simulate_operation
 from graficos import graficar_desde_series
 from optimizer import grid_search_optimize
-from milp import milp_optimize
 from funciones import *
 
+# -----------------------------
+#  Funciones de integración Excel
+# -----------------------------
+import xlwings as xw
+import pandas as pd
+import os
+
+# Ruta por defecto (usa el archivo subido si ejecutas desde IDE/terminal)
+DEFAULT_EXCEL_PATH = r"C:\Users\jinfa\Downloads\Proyecto_SanFranciscoCHIUCHIU.xlsm"
+
+def get_excel_path():
+    """
+    Intenta detectar el path del libro desde donde se lanzó (xlwings Book.caller()).
+    Si no está disponible (ejecución desde terminal), devuelve DEFAULT_EXCEL_PATH.
+    """
+    try:
+        wb = xw.Book.caller()
+        path = wb.fullname
+        if path is None or path == "":
+            raise Exception("Book.caller() no devolvió fullname")
+        return path
+    except Exception:
+        # fallback: si la variable de entorno XL_PATH está definida, úsala
+        env_path = os.environ.get("XLWINGS_EXCEL_PATH")
+        if env_path:
+            return env_path
+        # fallback final: DEFAULT_EXCEL_PATH
+        return DEFAULT_EXCEL_PATH
+
+
+def load_config_from_excel(path: str = None) -> SimulationConfig:
+    """
+    Lee desde la planilla (SFV+BESS y Financiera_GenSet) todos los parámetros
+    necesarios y devuelve un objeto SimulationConfig.
+    """
+    if path is None:
+        path = get_excel_path()
+
+    # Abrir con xlwings (esto funciona si Excel ya está abierto o cuando hay ruta)
+    wb = None
+    try:
+        wb = xw.Book(path)
+    except Exception:
+        # si Book(path) falla, intentar Book.caller()
+        try:
+            wb = xw.Book.caller()
+        except Exception:
+            raise RuntimeError(f"No se pudo abrir el libro: {path}")
+
+    sh_sfv = wb.sheets["SFV+BESS"]
+    sh_fin = wb.sheets["Financiera_GenSet"]
+    #sh_cuadro_resumen = wb.sheets["Cuadro Resumen"]
+
+    # --- celdas simples (xlwings para robustez) ---
+    N_years = int(sh_sfv.range("I3").value)
+    r = float(sh_fin.range("C10").value)
+
+    ef_charge = float(sh_sfv.range("I8").value)
+    ef_discharge = float(sh_sfv.range("I9").value)
+
+    soc_max_frac = float(sh_sfv.range("I12").value)
+    soc_min_frac = float(sh_sfv.range("I11").value)
+
+    charge_rate = float(sh_sfv.range("I13").value)
+    discharge_rate = float(sh_sfv.range("I13").value) 
+
+    pv_deg_rate = float(sh_sfv.range("D8").value)
+
+    C_pv_kWp = float(sh_fin.range("G5").value)
+    C_bess_kWh = float(sh_fin.range("G3").value)
+    C_diesel_lt = float(sh_fin.range("K3").value)
+
+    C_om_pv_kW_yr = float(sh_fin.range("G8").value)
+    C_om_bess_kWh_yr = float(sh_fin.range("G9").value)
+
+    cpi = float(sh_fin.range("K9").value)
+    diesel_inflation = float(sh_fin.range("K4").value)
+
+    DG_power = float(sh_sfv.range("Q10").value)
+    DG_opex = float(sh_fin.range("K2").value)
+
+    # bess_capacity_factors: M4:M24 (21 valores)
+    try:
+        df_bess = pd.read_excel(path, sheet_name="SFV+BESS", usecols="M", skiprows=3, nrows=21, header=None, engine="openpyxl")
+        bess_capacity_factors = df_bess.iloc[:,0].dropna().astype(float).tolist()
+    except Exception:
+        # fallback a lista por defecto de 1.0 si falla lectura
+        bess_capacity_factors = [1.0] * N_years
+        print("Advertencia: no se pudieron leer los factores de capacidad BESS, se usarán valores por defecto de 1.0") 
+    # DG_performance_factors: Q13:Q16 (4 valores)
+    try:
+        df_dg = pd.read_excel(path, sheet_name="SFV+BESS", usecols="Q", skiprows=12, nrows=4, header=None, engine="openpyxl")
+        DG_performance_factors = df_dg.iloc[:,0].dropna().astype(float).tolist()
+    except Exception:
+        DG_performance_factors = [0.0, 0.0, 0.0, 0.0]
+
+    # Construir el objeto SimulationConfig con los valores leídos
+    cfg = SimulationConfig(
+        N_years = N_years,
+        r = r,
+        ef_charge = ef_charge,
+        ef_discharge = ef_discharge,
+        soc_max_frac = soc_max_frac,
+        soc_min_frac = soc_min_frac,
+        charge_rate = charge_rate,
+        discharge_rate = discharge_rate,
+        pv_deg_rate = pv_deg_rate,
+        C_pv_kWp = C_pv_kWp,
+        C_bess_kWh = C_bess_kWh,
+        C_diesel_lt = C_diesel_lt,
+        C_om_pv_kW_yr = C_om_pv_kW_yr,
+        C_om_bess_kWh_yr = C_om_bess_kWh_yr,
+        cpi = cpi,
+        diesel_inflation = diesel_inflation,
+        bess_capacity_factors = bess_capacity_factors,
+        DG_performance_factors = DG_performance_factors,
+        DG_power = DG_power,
+        DG_opex = DG_opex
+    )
+
+    return cfg
+
+
+def run_optimizer(pv_min: float = None, pv_max: float = None,
+                  e_min: float = None, e_max: float = None,
+                  nPV: int = 15, nE: int = 15,parallel: bool = True,
+                  nprocs: int = 4, refine_steps: int = 2):
+    """
+    Función pública para ejecutar la optimización.
+    Si pv_min/pv_max/e_min/e_max son None, se leen desde la hoja SFV+BESS:
+      PV_range: J29 (min), J30 (max)
+      E_range:  J31 (min), J32 (max)
+    Escribe los resultados (PV_opt, BESS_opt, VPN) en SFV+BESS F5:F7 (puedes cambiar).
+    """
+    path = get_excel_path()
+    wb = xw.Book(path) if path else xw.Book.caller()
+    sh_sfv = wb.sheets["SFV+BESS"]
+    sh_gen = wb.sheets["Gen_Cons_Horario"]
+    sh_cuadro_resumen = wb.sheets["Cuadro Resumen"]
+
+    # leer perfiles horarios (usa tu data_loader existente)
+    # Nota: data_loader.read_load_hourly_from_excel y read_irradiation_from_excel esperan path y sheet_name
+    mat_24x12 = read_irradiation_from_excel(path, sheet_name="Gen_Cons_Horario")
+    irr_8760 = expand_monthly_matrix_to_annual_hourly(mat_24x12)
+    load_8760 = read_load_hourly_from_excel(path, sheet_name="Gen_Cons_Horario")
+
+    # cargar configuración
+    cfg = load_config_from_excel(path)
+
+    # leer PV/E ranges desde celdas si no fueron entregadas
+    if pv_min is None:
+        pv_min = float(sh_sfv.range("J29").value)
+    if pv_max is None:
+        pv_max = float(sh_sfv.range("J30").value)
+    if e_min is None:
+        e_min = float(sh_sfv.range("J31").value)
+    if e_max is None:
+        e_max = float(sh_sfv.range("J32").value)
+    if 1 == 1:
+        if sh_sfv.range("J33").value is None:
+            gen_fraction_limit = 1.0
+        else:
+            gen_fraction_limit = float(sh_sfv.range("J33").value)
+    if 1 == 1:
+        if sh_sfv.range("J34").value is None:
+            asegurar_año = 1.0
+        else:
+            asegurar_año = float(sh_sfv.range("J34").value)
+    
+
+    
+
+    # Ejecutar optimizador (grid_search por defecto)
+    best, df = grid_search_optimize(
+        irr_8760, load_8760, cfg,
+        PV_range=(pv_min, pv_max),
+        E_range=(e_min, e_max),
+        nPV=nPV,
+        nE=nE,
+        parallel=parallel,
+        nprocs=nprocs,
+        refine_steps=refine_steps,
+        gen_fraction_limit=gen_fraction_limit,
+        asegurar_año=asegurar_año
+    )
+
+    # Escribir resultados en Excel
+    if best is not None:
+        # pv y bess óptimos
+        pv_opt = best.get('PV_kWp')
+        bess_opt = best.get('E_bess_kWh')
+        npv_opt = best.get('npv')
+        generacion = best.get('generacion')
+        consumo_desde_pv = best.get('consumo_desde_pv')
+        consumo_desde_bess = best.get('consumo_desde_bess')
+        consumo_desde_genset = best.get('consumo_desde_genset')
+        fuel_hybrid_by_year = best.get('fuel_hybrid_by_year')
+        tiempo_transcurrido_optimizacion = best.get('tiempo_transcurrido_optimizacion')
+        fraccion_generador = best.get('gen_fraction_real')
+
+        # Escribir en celdas
+
+        sh_sfv.range("J37").value = pv_opt
+        sh_sfv.range("J38").value = bess_opt
+        sh_sfv.range("J39").value = npv_opt
+        sh_sfv.range("J40").value = fraccion_generador[1]
+        sh_cuadro_resumen.range("P4").value = generacion[1]
+        sh_cuadro_resumen.range("Q4").value = consumo_desde_pv[1]
+        sh_cuadro_resumen.range("R4").value = consumo_desde_bess[1]
+        sh_cuadro_resumen.range("S4").value = consumo_desde_genset[1]
+
+    else:
+        pv_opt = None
+        bess_opt = None
+        npv_opt = None
+        fraccion_generador = None
+        generacion = {}
+        consumo_desde_pv = {}
+        consumo_desde_bess = {}
+        consumo_desde_genset = {}
+        fuel_hybrid_by_year = {}
+        tiempo_transcurrido_optimizacion = None
+
+        # Escribir en celdas
+        sh_sfv.range("J37").value = "error"
+        sh_sfv.range("J38").value = "error"
+        sh_sfv.range("J39").value = "error"
+        sh_sfv.range("J40").value = "error"
+        sh_cuadro_resumen.range("P4").value = "error"
+        sh_cuadro_resumen.range("Q4").value = "error"
+        sh_cuadro_resumen.range("R4").value = "error"
+        sh_cuadro_resumen.range("S4").value = "error"
+    
+
+    return {"pv_opt": pv_opt, "bess_opt": bess_opt, "npv": npv_opt, "generacion": generacion,
+            "consumo_desde_pv": consumo_desde_pv,"consumo_desde_bess": consumo_desde_bess,
+            "consumo_desde_genset": consumo_desde_genset,"fuel_hybrid_by_year": fuel_hybrid_by_year,
+            "tiempo_transcurrido_optimizacion": tiempo_transcurrido_optimizacion}
+
+
+
+if __name__ == "__main__":
+    import multiprocessing
+    multiprocessing.freeze_support()   
+
+    mat_24x12 = read_irradiation_from_excel(DEFAULT_EXCEL_PATH, sheet_name="Gen_Cons_Horario")
+    irr_8760 = expand_monthly_matrix_to_annual_hourly(mat_24x12)
+    load_8760 = read_load_hourly_from_excel(DEFAULT_EXCEL_PATH, sheet_name="Gen_Cons_Horario")
+    cfg = load_config_from_excel(DEFAULT_EXCEL_PATH)
+
+    PV_test =  588  # kWp 211
+    E_test = 1821  # kWh 60.3
+
+    # Capturar día 30 de enero durante la simulación principal
+    sim_results = simulate_operation(PV_test, E_test, irr_8760, load_8760, cfg, capture_day_of_january=40)
+    print("===== Para PV = ", PV_test, "kWp y BESS =", E_test, "kWh =====")
+    print_results("Resultados de simulación ejemplo", sim_results)
+
+'''
 # ===========================
 # Carga de datos
 # ===========================
-path = r"C:\Users\jinfa\OneDrive\Desktop\Versión_Final_Clientes_OFFGRID.xlsm"
-sheet_name = "Gen_Cons_Horario"
+#path = "C:\\Users\\jinfa\\OneDrive\\Desktop\\Version_Final_Clientes_OFFGRID.xlsm"
+#sheet_name = "Gen_Cons_Horario"
 
 # Cargar matriz mensual de irradiación (24h x 12 meses)
 mat_24x12 = read_irradiation_from_excel(path, sheet_name=sheet_name)
@@ -74,7 +332,7 @@ if __name__ == "__main__":
         import matplotlib.pyplot as plt
         graficar_desde_series(hourly)
         plt.show()
-'''''
+
 # ===========================
 # Optimización Grid Search
 # ===========================
@@ -112,4 +370,4 @@ best_pv, best_e, best_res = milp_optimize(
 print("\n--- Mejor PV+BESS (MILP) ---")
 print(f"PV: {best_pv} kWp, BESS: {best_e} kWh")
 print(f"NPV: {best_res['npv']:.2f}")
-'''''
+'''

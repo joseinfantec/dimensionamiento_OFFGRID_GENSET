@@ -68,7 +68,7 @@ def simulate_operation(PV_kWp, E_bess_kWh, irr_annual, load_annual, cfg: Simulat
     capex = PV_kWp * cfg.C_pv_kWp + E_bess_kWh * cfg.C_bess_kWh
     feasible = True
 
-    soc = cfg.soc_min_frac * E_bess_kWh * cfg.bess_capacity_factors[1]
+    soc = 0.5 * E_bess_kWh * cfg.bess_capacity_factors[1]
 
 
     fuel_hybrid_by_year = {}
@@ -78,13 +78,17 @@ def simulate_operation(PV_kWp, E_bess_kWh, irr_annual, load_annual, cfg: Simulat
     fuel_savings_cost = {}
     fuel_savings_cost_discounted = {}
 
-    consumo_desde_genset_hybrid = {}
     PV_BESS_GEN_opex_by_year = {}
-    soc_end_by_year = {}
-    losses_by_year = {}
+    gen_fraction_year = {}
+
     consumo_desde_pv = {}
     consumo_desde_bess = {}
+    consumo_desde_genset_hybrid = {}
+
     generacion_por_año = {}
+    soc_end_by_year = {}
+    losses_by_year = {}
+    
     gen_hours = {}
     gross_savings = {}
     net_savings_by_year = {}
@@ -168,10 +172,6 @@ def simulate_operation(PV_kWp, E_bess_kWh, irr_annual, load_annual, cfg: Simulat
                 gen_hours_year += 1
                 remaining_load = 0.0
 
-                #fuel = remaining_load
-                #fuel_consumed_year += fuel
-                #remaining_load = 0.0
-                #gen_hours_year += 1
             
             # Para escenario "solo generador": genset debe servir toda la carga 'load'
             if load > 1e-12:
@@ -205,12 +205,8 @@ def simulate_operation(PV_kWp, E_bess_kWh, irr_annual, load_annual, cfg: Simulat
         price_year = cfg.C_diesel_lt * ((1 + cfg.diesel_inflation) ** (y))
         fuel_cost_hybrid[y] = round(float(fuel_liters_year_hybrid * price_year), 2)
         fuel_cost_genonly[y] = round(float(fuel_liters_year_genonly * price_year), 2)
-        #served_by_clean = (load_total_year - fuel_consumed_year)  # en kWh
-        #fuel_savings_year = served_by_clean * cfg.C_gen_kWh * ((1 + cfg.diesel_inflation) ** (y))
 
-        #liters_saved = fuel_liters_year_genonly - fuel_liters_year_hybrid
         cost_saved = fuel_cost_genonly[y] - fuel_cost_hybrid[y]
-        #fuel_savings_liters[y] = round(float(liters_saved), 2)
         fuel_savings_cost[y] = round(float(cost_saved), 2)
         fuel_savings_cost_discounted[y] = round(float(cost_saved * cfg.df_year[y]), 2)
 
@@ -219,6 +215,7 @@ def simulate_operation(PV_kWp, E_bess_kWh, irr_annual, load_annual, cfg: Simulat
         consumo_desde_genset_hybrid[y] = round(float(gen_served), 2)
         generacion_por_año[y] = round(float(generación_anual), 2)
         gen_hours[y] = gen_hours_year
+        gen_fraction_year[y] = (gen_served / load_total_year) if load_total_year > 0 else 0.0
 
         GEN_opex_year = cfg.DG_opex *(load_hours_year - gen_hours_year) * ((1 + cfg.cpi) ** (y))
         PV_BESS_opex = (cfg.C_om_pv_kW_yr + cfg.C_om_bess_kWh_yr) * ((1 + cfg.cpi) ** (y))
@@ -228,13 +225,6 @@ def simulate_operation(PV_kWp, E_bess_kWh, irr_annual, load_annual, cfg: Simulat
         gross_savings[y] = gross_savings_year
         net_savings_by_year[y] = (gross_savings_year) * cfg.df_year[y]
 
-        #consumo_desde_genset_hybrid[y] = fuel_consumed_year
-        #fuel_savings_by_year[y] = fuel_savings_year
-
-        #if y < cfg.N_years:
-        #    soc = min(soc, E_bess_kWh * cfg.bess_capacity_factors[y+1] * cfg.soc_max_frac)
-       #if cfg.battery_replacement and (y in cfg.battery_replacement):
-       #    repl_cost = cfg.battery_replacement[y] * E_bess_kWh
 
     # --- Conversiones a float nativo y redondeo a 2 decimales ---
     soc_end_by_year = {y: round(float(v), 2) for y, v in soc_end_by_year.items()}
@@ -271,18 +261,19 @@ def simulate_operation(PV_kWp, E_bess_kWh, irr_annual, load_annual, cfg: Simulat
         'fuel_cost_hybrid': fuel_cost_hybrid,
         'fuel_cost_genonly': fuel_cost_genonly,
         'fuel_savings_cost': fuel_savings_cost,
-        #'fuel_savings_cost_discounted': fuel_savings_cost_discounted,
+        'fuel_savings_cost_discounted': fuel_savings_cost_discounted,
         'assets_opex_by_year': PV_BESS_GEN_opex_by_year,
         'soc_end_by_year': soc_end_by_year,
         'losses_by_year': losses_by_year,
         'consumo_desde_pv': consumo_desde_pv,
         'consumo_desde_bess': consumo_desde_bess,
         'consumo_desde_genset': consumo_desde_genset_hybrid,
-        'generación': generacion_por_año,
+        'generacion': generacion_por_año,
         'horas_generador_on': gen_hours,
         'gross_savings': gross_savings,
         'payback_year': payback_year,
-        'hourly_capture': hourly_capture
+        'hourly_capture': hourly_capture,
+        'gen_fraction_real': gen_fraction_year
     }
 
 

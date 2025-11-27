@@ -9,10 +9,10 @@ def print_results(title, results):
         print(f"Payback (años): {pb:.1f}")
     print(f"Capex: {results['capex']:.2f}")
 
-    years = sorted(results['generación'].keys())
+    years = sorted(results['generacion'].keys())
 
     data = {
-        "Generación total": [results['generación'][y] for y in years],
+        "Generación total": [results['generacion'][y] for y in years],
         "Consumo desde PV": [results['consumo_desde_pv'][y] for y in years],
         "Consumo desde BESS": [results['consumo_desde_bess'][y] for y in years],
         "Consumo desde Genset": [results['consumo_desde_genset'][y] for y in years],
@@ -58,7 +58,7 @@ def print_results_reducidos(title, best):
     # Claves esperadas que fueron añadidas en optimizer al 'best'
     consumo_pv = best.get('consumo_desde_pv') or {}
     consumo_bess = best.get('consumo_desde_bess') or {}
-    generacion = best.get('generación') or {}
+    generacion = best.get('generacion') or {}
     gen_hours = best.get('horas_generador_on') or {}
     gross_savings = best.get('gross_savings') or {}
     consumo_genset = best.get('consumo_desde_genset') or {}
@@ -71,7 +71,7 @@ def print_results_reducidos(title, best):
         "Pérdidas FV": [best['Losses_by_year'].get(y, 0.0) for y in years],
         "Horas generador ON": [gen_hours.get(y, 0) for y in years],
         "Gross Savings": [gross_savings.get(y, 0.0) for y in years],
-        "Generación FV": [generacion.get(y, 0.0) for y in years],
+        "Generacion FV": [generacion.get(y, 0.0) for y in years],
         # Extras que ya existían
         # "SOC final": [best['SOC_end_by_year'][y] for y in years],
         # "Opex PV+BESS+GEN": [best['Assets_OPEX_by_year'][y] for y in years],
