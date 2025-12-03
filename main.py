@@ -202,6 +202,12 @@ def run_optimizer(pv_min: float = None, pv_max: float = None,
             asegurar_año = 1.0
         else:
             asegurar_año = float(sh_sfv.range("J34").value)
+    if 1 == 1:
+        if sh_sfv.range("J35").value is None:
+            limit_payback = cfg.N_years
+        else:
+            limit_payback = float(sh_sfv.range("J35").value)
+            
     
     # Ejecutar optimizador (grid_search por defecto)
     best, df = grid_search_optimize(
@@ -214,7 +220,8 @@ def run_optimizer(pv_min: float = None, pv_max: float = None,
         nprocs=nprocs,
         refine_steps=refine_steps,
         gen_fraction_limit=gen_fraction_limit,
-        asegurar_año=asegurar_año
+        asegurar_año=asegurar_año,
+        limit_payback=limit_payback
     )
 
     if best is not None:
@@ -229,11 +236,13 @@ def run_optimizer(pv_min: float = None, pv_max: float = None,
         fuel_hybrid_by_year = best.get('fuel_hybrid_by_year')
         tiempo_transcurrido_optimizacion = best.get('tiempo_transcurrido_optimizacion')
         fraccion_generador = best.get('gen_fraction_real')
+        payback = best.get('payback_year')
         # Escribir en celdas
         sh_sfv.range("J37").value = pv_opt
         sh_sfv.range("J38").value = bess_opt
         sh_sfv.range("J39").value = npv_opt
         sh_sfv.range("J40").value = fraccion_generador[1]
+        sh_sfv.range("J41").value = payback
         sh_cuadro_resumen.range("P4").value = generacion[1]
         sh_cuadro_resumen.range("Q4").value = consumo_desde_pv[1]
         sh_cuadro_resumen.range("R4").value = consumo_desde_bess[1]

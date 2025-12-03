@@ -26,7 +26,6 @@ def run_optimization():
             sistema.range("J37").value = "SIN SOLUCIÓN"
             sistema.range("J38").value = ""
             sistema.range("J39").value = ""
-            sistema.range("I40").value = ""
             return
 
         else:

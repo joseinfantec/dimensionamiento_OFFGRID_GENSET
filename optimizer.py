@@ -1,8 +1,9 @@
 from multiprocessing import Pool
 import numpy as np
-from simulator import simulate_operation
+from simulator import simulate_operation, SimulationConfig
 import pandas as pd
 import time
+
 
 # Mayor refine_factor, mayor zona explorada escapando de mínimos locales (más tiempo)
 # Refine_steps son las veces que refinamos el código.
@@ -10,9 +11,9 @@ import time
 
 
 def evaluate_grid_point(args):
-    PV, E, irr, load, cfg, gen_fraction_limit, asegurar_año = args
+    PV, E, irr, load, cfg, gen_fraction_limit, asegurar_año, limit_payback = args
     res = simulate_operation(PV, E, irr, load, cfg)
-    feasible = bool(res['feasible']) and (res['gen_fraction_real'].get(asegurar_año, 0.000000) <= gen_fraction_limit)
+    feasible = bool(res['feasible']) and (res['gen_fraction_real'].get(asegurar_año, 0.000000) <= gen_fraction_limit) and (res.get('payback_year') <= limit_payback)
 
     return (PV, E, res['npv'], feasible, res['capex'],
             res['assets_opex_by_year'],
@@ -20,7 +21,6 @@ def evaluate_grid_point(args):
             res['fuel_genonly_by_year'],
             res['fuel_cost_hybrid'],
             res['fuel_cost_genonly'],
-            #res['soc_end_by_year'],
             res['losses_by_year'],
             res.get('payback_year'),
             res['gen_fraction_real'])
@@ -30,18 +30,18 @@ def grid_search_optimize(irr_annual, load_annual, cfg,
                         nPV=21, nE=21, parallel=True,
                         nprocs=4, refine_steps=2,
                         refine_factor=0.25, gen_fraction_limit=1.0,
-                        asegurar_año=1.0):
+                        asegurar_año=1.0, limit_payback = 20):
     start_time = time.time()
     PV_min, PV_max = PV_range
     E_min, E_max = E_range
     PV_grid = np.linspace(PV_min, PV_max, nPV)
     E_grid = np.linspace(E_min, E_max, nE)
-    tasks = [(pv, eb, irr_annual, load_annual, cfg, gen_fraction_limit, asegurar_año) for pv in PV_grid for eb in E_grid]
+    tasks = [(pv, eb, irr_annual, load_annual, cfg, gen_fraction_limit, asegurar_año, limit_payback) for pv in PV_grid for eb in E_grid]
     unique = {}
-    for (pv, eb, irr_, load_, cfg_, gen_fraction_limit_, asegurar_año_) in tasks:
+    for (pv, eb, irr_, load_, cfg_, gen_fraction_limit_, asegurar_año_, limit_payback_) in tasks:
         key = (round(float(pv), 6), round(float(eb), 6))
         if key not in unique:
-            unique[key] = (pv, eb, irr_, load_, cfg_, gen_fraction_limit_, asegurar_año_)
+            unique[key] = (pv, eb, irr_, load_, cfg_, gen_fraction_limit_, asegurar_año_, limit_payback_)
     tasks = list(unique.values())
 
     results = []
@@ -57,8 +57,7 @@ def grid_search_optimize(irr_annual, load_annual, cfg,
     df = pd.DataFrame(results, columns=['PV_kWp', 'E_bess_kWh', 'npv', 'Feasible',
                                         'CAPEX', 'Assets_OPEX_by_year', 'Fuel_liters_hybrid_by_year', 'Fuel_liters_genonly_by_year',
                                         'Fuel_cost_hybrid', 'Fuel_cost_genonly',
-                                        #'SOC_end_by_year'
-                                        'Losses_by_year', 'Payback_yr', 'gen_fraction_real'])
+                                        'Losses_by_year', 'payback_year', 'gen_fraction_real'])
     df_factible = df[df['Feasible'] == True]
     best = None
     if not df_factible.empty:
@@ -83,12 +82,12 @@ def grid_search_optimize(irr_annual, load_annual, cfg,
 
         PV_grid = np.linspace(new_PV_min, new_PV_max, nPV)
         E_grid = np.linspace(new_E_min, new_E_max, nE)
-        tasks = [(pv, eb, irr_annual, load_annual, cfg, gen_fraction_limit, asegurar_año) for pv in PV_grid for eb in E_grid]
+        tasks = [(pv, eb, irr_annual, load_annual, cfg, gen_fraction_limit, asegurar_año, limit_payback) for pv in PV_grid for eb in E_grid]
         unique = {}
-        for (pv, eb, irr_, load_, cfg_, gen_fraction_limit_, asegurar_año_) in tasks:
+        for (pv, eb, irr_, load_, cfg_, gen_fraction_limit_, asegurar_año_, limit_payback_) in tasks:
             key = (round(float(pv), 6), round(float(eb), 6))
             if key not in unique:
-                unique[key] = (pv, eb, irr_, load_, cfg_, gen_fraction_limit_, asegurar_año_)
+                unique[key] = (pv, eb, irr_, load_, cfg_, gen_fraction_limit_, asegurar_año_, limit_payback_)
         tasks = list(unique.values())
 
         new_results = []
@@ -103,8 +102,8 @@ def grid_search_optimize(irr_annual, load_annual, cfg,
 
         new_df = pd.DataFrame(new_results, columns=['PV_kWp', 'E_bess_kWh', 'npv', 'Feasible',
                                         'CAPEX', 'Assets_OPEX_by_year', 'Fuel_liters_hybrid_by_year', 'Fuel_liters_genonly_by_year',
-                                        'Fuel_cost_hybrid', 'Fuel_cost_genonly',#'SOC_end_by_year', 
-                                        'Losses_by_year', 'Payback_yr', 'gen_fraction_real'])
+                                        'Fuel_cost_hybrid', 'Fuel_cost_genonly',
+                                        'Losses_by_year', 'payback_year', 'gen_fraction_real'])
         df = pd.concat([df, new_df], ignore_index=True)
         df_factible = df[df['Feasible'] == True]
         if df_factible.empty:
@@ -137,6 +136,7 @@ def grid_search_optimize(irr_annual, load_annual, cfg,
         best['consumo_desde_genset'] = detailed.get('consumo_desde_genset', {})
         best['tiempo_transcurrido_optimizacion'] = elapsed
         best['gen_fraction_real'] = detailed.get('gen_fraction_real', {})
+        best['payback_year'] = detailed.get('payback_year')
 
         #gen1 = detailed.get('consumo_desde_genset', {}).get(1, 0.0)
         #bess1 = detailed.get('consumo_desde_bess', {}).get(1, 0.0)
